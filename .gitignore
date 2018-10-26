@@ -2,3 +2,4 @@
 datasets
 data
 venv
+__pycache__
