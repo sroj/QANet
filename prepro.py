@@ -1,3 +1,5 @@
+import re
+
 import tensorflow as tf
 import random
 from tqdm import tqdm
@@ -269,6 +271,42 @@ def save(filename, obj, message=None):
             json.dump(obj, fh)
 
 
+def _save_to_file_one_element_per_line(output_filename, iterable):
+    with open(output_filename, mode='w') as f:
+        rows_with_newline_characters = [row + '\n' for row in iterable]
+        f.writelines(rows_with_newline_characters)
+
+
+def _extract_and_save_vocabulary(word2idx_dict):
+    vocabulary = list(word2idx_dict.keys())
+    vocabulary_filename = "data/ross-vocab.txt"
+    _save_to_file_one_element_per_line(vocabulary_filename, vocabulary)
+
+
+def _extract_and_save_questions_and_answers(examples, output_filename, index_filename):
+    flattened_dataset = list()
+    dataset_index = list()
+
+    for example in examples:
+        example_id = example['id']
+
+        assert example['context_tokens'] and len(example['context_tokens']) > 0
+        assert example['ques_tokens'] and len(example['ques_tokens']) > 0
+
+        stripped_context_tokens = [re.sub(r'\n+|\r+', '', token) for token in example['context_tokens']]
+        concatenated_context = " ".join(stripped_context_tokens)
+        flattened_dataset.append(concatenated_context.strip())
+        dataset_index.append(str(example_id).strip() + "-c")
+
+        stripped_question_tokens = [re.sub(r'\n+|r+', '', token) for token in example['ques_tokens']]
+        concatenated_question = " ".join(stripped_question_tokens)
+        flattened_dataset.append(concatenated_question.strip())
+        dataset_index.append(str(example_id).strip() + "-q")
+
+    _save_to_file_one_element_per_line(output_filename, flattened_dataset)
+    _save_to_file_one_element_per_line(index_filename, dataset_index)
+
+
 def prepro(config):
     word_counter, char_counter = Counter(), Counter()
     train_examples, train_eval = process_file(
@@ -287,6 +325,12 @@ def prepro(config):
         word_counter, "word", emb_file=word_emb_file, size=config.glove_word_size, vec_size=config.glove_dim)
     char_emb_mat, char2idx_dict = get_embedding(
         char_counter, "char", emb_file=char_emb_file, size=char_emb_size, vec_size=char_emb_dim)
+
+    # _extract_and_save_vocabulary(word2idx_dict)
+
+    # dataset_filename = 'data/ross-dataset.txt'
+    # index_filename = 'data/ross-dataset-index.txt'
+    # _extract_and_save_questions_and_answers(train_examples, dataset_filename, index_filename)
 
     build_features(config, train_examples, "train",
                    config.train_record_file, word2idx_dict, char2idx_dict)

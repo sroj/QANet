@@ -4,6 +4,7 @@ import numpy as np
 from tqdm import tqdm
 import os
 
+print(tf.executing_eagerly())
 '''
 This file is taken and modified from R-Net by HKUST-KnowComp
 https://github.com/HKUST-KnowComp/R-Net
@@ -26,10 +27,24 @@ def train(config):
         dev_eval_file = json.load(fh)
     with open(config.dev_meta, "r") as fh:
         meta = json.load(fh)
+    with open(config.word_dictionary, 'r') as f:
+        word_dictionary = json.load(f)
+        inverse_word_dictionary = {value: key for key, value in word_dictionary.items()}
+        inverse_word_list = [inverse_word_dictionary[key] for key in sorted(inverse_word_dictionary.keys())]
+        inverse_word_tensor = tf.constant(inverse_word_list, dtype=tf.string)
 
     dev_total = meta["total"]
     print("Building model...")
     parser = get_record_parser(config)
+
+    train_dataset = get_batch_dataset(config.train_record_file, parser, config)
+    for elem in train_dataset.make_one_shot_iterator():
+        c, q, ch, qh, y1, y2, qa_id = elem
+        sentences = tf.map_fn(lambda sentence: tf.map_fn(lambda token: inverse_word_dictionary[token.numpy()], sentence, dtype=tf.string), c, dtype=tf.string)
+        # sentences_string = tf.map_fn(lambda sentence: tf.map_fn(lambda token: token.numpy().decode('utf8'), sentence, dtype=tf.string), sentences, dtype=tf.string)
+
+        pass
+
     graph = tf.Graph()
     with graph.as_default() as g:
         train_dataset = get_batch_dataset(config.train_record_file, parser, config)
@@ -40,7 +55,7 @@ def train(config):
         train_iterator = train_dataset.make_one_shot_iterator()
         dev_iterator = dev_dataset.make_one_shot_iterator()
 
-        model = Model(config, iterator, word_mat, char_mat, graph = g)
+        model = Model(config, iterator, word_mat, char_mat, graph = g, word_dictionary=word_dictionary)
 
         sess_config = tf.ConfigProto(allow_soft_placement=True)
         sess_config.gpu_options.allow_growth = True

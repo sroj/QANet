@@ -1,11 +1,33 @@
 import tensorflow as tf
 from layers import initializer, regularizer, residual_block, highway, conv, mask_logits, trilinear, total_params, optimized_trilinear_for_attention
 
+from bilm import Batcher, BidirectionalLanguageModel, weight_layers
+
+WEIGHTED_OP = 'weighted_op'
+
+
 class Model(object):
-    def __init__(self, config, batch, word_mat=None, char_mat=None, trainable=True, opt=True, demo = False, graph = None):
+    def __init__(self, config, batch, word_mat=None, char_mat=None, trainable=True, opt=True, demo = False, graph = None, word_dictionary=None):
         self.config = config
         self.demo = demo
         self.graph = graph if graph is not None else tf.Graph()
+
+        self.elmo_options_file = config.elmo_options_file
+        self.elmo_weights_file = config.elmo_weights_file
+        self.elmo_vocabulary_file = config.elmo_vocabulary_file
+
+        if word_dictionary:
+            self.word_dictionary = word_dictionary
+            inverse_word_dictionary = {value:key for key, value in self.word_dictionary.items()}
+            self.inverse_word_tensor = tf.get_variable("inverse_word_tensor",
+                                                   initializer=tf.constant(inverse_word_dictionary, dtype=tf.string))
+
+        # Create a Batcher to map text to character ids.
+        self.batcher = Batcher(self.elmo_vocabulary_file, 50)
+
+        # Build the biLM graph.
+        self.bilm = BidirectionalLanguageModel(self.elmo_options_file, self.elmo_weights_file)
+
         with self.graph.as_default():
 
             self.global_step = tf.get_variable('global_step', shape=[], dtype=tf.int32,
@@ -26,6 +48,7 @@ class Model(object):
                 word_mat, dtype=tf.float32), trainable=False)
             self.char_mat = tf.get_variable(
                 "char_mat", initializer=tf.constant(char_mat, dtype=tf.float32))
+
 
             self.c_mask = tf.cast(self.c, tf.bool)
             self.q_mask = tf.cast(self.q, tf.bool)
@@ -89,14 +112,78 @@ class Model(object):
             ch_emb = tf.reshape(ch_emb, [N, PL, ch_emb.shape[-1]])
             qh_emb = tf.reshape(qh_emb, [N, QL, ch_emb.shape[-1]])
 
-            c_emb = tf.nn.dropout(tf.nn.embedding_lookup(self.word_mat, self.c), 1.0 - self.dropout)
-            q_emb = tf.nn.dropout(tf.nn.embedding_lookup(self.word_mat, self.q), 1.0 - self.dropout)
 
-            c_emb = tf.concat([c_emb, ch_emb], axis=2)
-            q_emb = tf.concat([q_emb, qh_emb], axis=2)
+            # Input placeholders to the biLM.
+            context_tokens_tensor = tf.map_fn(lambda sentence: tf.map_fn(lambda token: self.inverse_word_dictionary[token], sentence, dtype=tf.string), self.c, dtype=tf.string)
+            question_tokens_tensor = tf.map_fn(lambda sentence: tf.map_fn(lambda token: self.inverse_word_dictionary[token], sentence), self.q)
+
+            context_character_ids = tf.placeholder('int32', shape=(None, None, 50))
+            question_character_ids = tf.placeholder('int32', shape=(None, None, 50))
+
+            # Get ops to compute the LM embeddings.
+            context_embeddings_op = self.bilm(self.context_character_ids)
+            question_embeddings_op = self.bilm(self.question_character_ids)
+
+            # Get an op to compute ELMo (weighted average of the internal biLM layers)
+            # Our SQuAD model includes ELMo at both the input and output layers
+            # of the task GRU, so we need 4x ELMo representations for the question
+            # and context at each of the input and output.
+            # We use the same ELMo weights for both the question and context
+            # at each of the input and output.
+            elmo_context_input = weight_layers('input', context_embeddings_op, l2_coef=0.0)
+
+            with tf.variable_scope('', reuse=True):
+                # the reuse=True scope reuses weights from the context for the question
+                elmo_question_input = weight_layers(
+                    'input', question_embeddings_op, l2_coef=0.0
+                )
+
+            # context_elmo_embeddings, question_elmo_embeddings = self._compute_elmo_embedding(self.c_tokens, self.q_tokens)
+
+            # Create batches of data.
+            context_ids = self.batcher.batch_sentences_tensor(self.c_tokens)
+            question_ids = self.batcher.batch_sentences_tensor(self.q_tokens)
+
+            # Compute ELMo representations (here for the input only, for simplicity).
+            # elmo_context_input_, elmo_question_input_ = sess.run(
+            #     [self.elmo_context_input['weighted_op'], self.elmo_question_input['weighted_op']],
+            #     feed_dict={self.context_character_ids: context_ids,
+            #                self.question_character_ids: question_ids}
+            # )
+
+            context_elmo_embeddings = elmo_context_input[WEIGHTED_OP]
+            question_elmo_embeddings = elmo_question_input[WEIGHTED_OP]
+
+            c_emb_elmo = tf.nn.dropout(context_elmo_embeddings, 1.0 - self.dropout)
+            q_emb_elmo = tf.nn.dropout(question_elmo_embeddings, 1.0 - self.dropout)
+
+            context_embedding = tf.nn.embedding_lookup(self.word_mat, self.c)
+            c_emb = tf.nn.dropout(context_embedding, 1.0 - self.dropout)
+            question_embedding = tf.nn.embedding_lookup(self.word_mat, self.q)
+            q_emb = tf.nn.dropout(question_embedding, 1.0 - self.dropout)
+
+            print(context_embedding.shape)
+            print(question_embedding.shape)
+            print(self.c)
+            print(self.c.shape)
+            print(self.q)
+            print(self.q.shape)
+            print('embedding shapes:')
+            print(c_emb.shape)
+            print(q_emb.shape)
+            print(ch_emb.shape)
+            print(qh_emb.shape)
+
+            c_emb = tf.concat([c_emb, ch_emb, c_emb_elmo], axis=2)
+            q_emb = tf.concat([q_emb, qh_emb, q_emb_elmo], axis=2)
+            print(c_emb.shape)
+            print(q_emb.shape)
 
             c_emb = highway(c_emb, size = d, scope = "highway", dropout = self.dropout, reuse = None)
             q_emb = highway(q_emb, size = d, scope = "highway", dropout = self.dropout, reuse = True)
+
+            print(c_emb.shape)
+            print(q_emb.shape)
 
         with tf.variable_scope("Embedding_Encoder_Layer"):
             c = residual_block(c_emb,

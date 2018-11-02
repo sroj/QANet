@@ -1,5 +1,6 @@
 import os
 import tensorflow as tf
+tf.enable_eager_execution()
 
 '''
 This file is taken and modified from R-Net by HKUST-KnowComp
@@ -16,6 +17,10 @@ train_file = os.path.join(home, "datasets", "squad", "train-v1.1.json")
 dev_file = os.path.join(home, "datasets", "squad", "dev-v1.1.json")
 test_file = os.path.join(home, "datasets", "squad", "dev-v1.1.json")
 glove_word_file = os.path.join(home, "datasets", "glove", "glove.840B.300d.txt")
+
+elmo_vocabulary_file = os.path.join(home, "datasets", "elmo", "ross-vocab.txt")
+elmo_options_file = os.path.join(home, "datasets", "elmo", "elmo_2x4096_512_2048cnn_2xhighway_options.json")
+elmo_weights_file = os.path.join(home, "datasets", "elmo", "elmo_2x4096_512_2048cnn_2xhighway_weights.hdf5")
 
 train_dir = "train"
 model_name = "FRC"
@@ -60,6 +65,10 @@ flags.DEFINE_string("train_file", train_file, "Train source file")
 flags.DEFINE_string("dev_file", dev_file, "Dev source file")
 flags.DEFINE_string("test_file", test_file, "Test source file")
 flags.DEFINE_string("glove_word_file", glove_word_file, "Glove word embedding source file")
+
+flags.DEFINE_string("elmo_vocabulary_file", elmo_vocabulary_file, "Elmo vocabulary file")
+flags.DEFINE_string("elmo_options_file", elmo_options_file, "Elmo options file")
+flags.DEFINE_string("elmo_weights_file", elmo_weights_file, "Elmo weights file")
 
 flags.DEFINE_string("train_record_file", train_record_file, "Out file for train data")
 flags.DEFINE_string("dev_record_file", dev_record_file, "Out file for dev data")
